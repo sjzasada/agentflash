@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>agentflash</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <span class="brand">agentflash</span>
+    <span class="dir" id="dir"></span>
+    <span class="spacer"></span>
+    <button id="refresh">Refresh tree</button>
+    <button id="toggle" class="primary">Stop</button>
+    <label>window
+      <select id="window">
+        <option value="10">10s</option>
+        <option value="30" selected>30s</option>
+        <option value="120">2m</option>
+        <option value="300">5m</option>
+      </select>
+    </label>
+    <input type="text" id="filter" placeholder="filter path…" />
+    <span class="status" id="status">connecting…</span>
+    <span class="status" id="counters">recv=0 drawn=0 unmapped=0</span>
+  </header>
+  <main>
+    <aside id="tree"></aside>
+    <section id="canvasWrap">
+      <canvas id="tape"></canvas>
+      <div id="tooltip" class="hidden"></div>
+      <div class="legend">
+        <span class="lg lg-read"></span>read
+        <span class="lg lg-write"></span>write
+        <span class="lg lg-other"></span>other
+      </div>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
