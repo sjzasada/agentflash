@@ -1,7 +1,7 @@
 # agentflash
 
 Real-time visualizer of filesystem activity in a watched directory, with
-optional correlation to Claude Code tool calls. macOS only.
+optional correlation to Claude Code tool calls. Runs on macOS and Linux.
 
 The browser UI shows a "seismograph tape" of every file read/write that
 happens under the watched directory, plus a live tree on the left that
@@ -20,11 +20,12 @@ FSEvents  (no sudo)     ──┼─►  hub  ─►  WS  ─►  browser canvas
 Claude Code hooks (HTTP) ─┘
 ```
 
-- **fs_usage** is the only thing on macOS that can observe `read()`
-  syscalls, so the privileged "tap" subprocess parses its output.
-- **FSEvents** drives the file tree's live update and provides write
-  events that fs_usage misses (e.g. zsh redirect builtins, which are
-  hidden from fs_usage by SIP).
+- **fs_usage** (macOS) / **fanotify** (Linux) is the kernel-level
+  read-event source. The privileged "tap" subprocess wraps it.
+- **FSEvents** (macOS) / **inotify** (Linux), via `rjeczalik/notify`,
+  drives the file tree's live update and provides write events the
+  syscall tracer may miss (e.g. zsh redirect builtins on macOS, which
+  SIP hides from fs_usage).
 - **Claude Code hooks** post tool-call payloads to the user-mode HTTP
   server.
 
@@ -37,12 +38,19 @@ prompt per launch.
 ## Build & run
 
 ```sh
-make build           # produces ./bin/agentflash
+make build           # native build for the current OS
+make build-all       # also cross-compile Linux amd64 + arm64 from a Mac
 ./bin/agentflash --dir ~/some/project
 ```
 
 Open <http://127.0.0.1:7777>. You'll be prompted once for your sudo
-password (used to start `fs_usage`).
+password (used to start `fs_usage` on macOS, `fanotify` on Linux —
+both require root).
+
+**Linux requirements**: kernel ≥ 5.1 for `FAN_MARK_FILESYSTEM`; older
+kernels fall back to a per-mount mark. `CAP_SYS_ADMIN` (i.e. sudo)
+is required either way. No `apt` package needed — fanotify is in the
+kernel and we wrap it via `golang.org/x/sys/unix`.
 
 ## Claude Code integration
 
@@ -89,7 +97,9 @@ Subcommands:
   - Green / blue (top lane) = Claude tool call (subagent → blue)
 - Hover any tick for full path, op, process, and Claude details.
 
-## Known limitations (macOS specifics)
+## Known limitations
+
+**macOS**
 
 - Requires sudo (for `fs_usage`).
 - `fs_usage` cannot see syscalls from hardened-runtime binaries (e.g.
@@ -99,6 +109,16 @@ Subcommands:
 - Process names with spaces (e.g. `Code Helper (Renderer)`) parse
   imperfectly into the trailing `process.pid` field.
 
+**Linux**
+
+- Requires sudo (fanotify needs `CAP_SYS_ADMIN`).
+- Process names from `/proc/<pid>/comm` are kernel-truncated to 15
+  characters. The default exclude list uses these truncated forms.
+- A short-lived process can exit between event delivery and our
+  `/proc` lookup; in that case the process column is blank.
+- Files deleted between event and our `/proc/self/fd` readlink show up
+  with a `(deleted)` suffix on the path. Best-effort.
+
 ## Layout
 
 ```
@@ -106,8 +126,15 @@ agentflash/
 ├── main.go                  # subcommand dispatch
 ├── internal/
 │   ├── event/               # shared Event + ClaudeInfo wire format
-│   ├── tap/                 # fs_usage parser + filter loop
-│   ├── treewatch/           # FSEvents wrapper (rjeczalik/notify)
+│   ├── tap/
+│   │   ├── tap.go           # OS-agnostic glue (Config, helpers)
+│   │   ├── tap_darwin.go    # fs_usage subprocess + parser
+│   │   ├── parse.go         # fs_usage line parser (darwin only)
+│   │   ├── tap_linux.go     # fanotify Run loop
+│   │   ├── fanotify_linux.go # FanotifyInit/Mark + event decoder
+│   │   ├── proc_linux.go    # /proc/<pid>/comm reader
+│   │   └── exclude_*.go     # per-OS noise process lists
+│   ├── treewatch/           # FSEvents (darwin) / inotify (linux)
 │   └── ui/                  # HTTP, WS, hub, hooks endpoint
 └── web/                     # embedded index.html / app.js / style.css
 ```

@@ -1,31 +1,19 @@
-// Package treewatch wraps the macOS FSEvents API to emit notifications
-// when directory contents under a root change. It is independent of the
-// fs_usage tap: it doesn't need sudo and exists specifically to drive
-// dynamic updates of the file tree in the UI.
+// Package treewatch wraps the kernel's filesystem-change API to emit
+// notifications when directory contents under a root change. It is
+// independent of the fs_usage / fanotify tap: it doesn't need sudo
+// and exists specifically to drive dynamic updates of the file tree
+// in the UI.
 //
-// On modern macOS, fs_usage often cannot observe syscalls from
+// On macOS, fs_usage often cannot observe syscalls from
 // hardened/SIP-protected processes such as /bin/zsh. FSEvents has no
 // such restriction, so this package is also the source of truth for
-// "a file was modified" timeline events.
+// "a file was modified" timeline events. On Linux, inotify (via the
+// same rjeczalik/notify wrapper) plays the same role.
 package treewatch
 
 import (
-	"strings"
-
 	"github.com/rjeczalik/notify"
 )
-
-// macDataVolume is the macOS firmlink target where /Users actually
-// lives on APFS. FSEvents commonly emits paths under this prefix,
-// even when the watched root is `/Users/...`.
-const macDataVolume = "/System/Volumes/Data"
-
-func normalizePath(p string) string {
-	if strings.HasPrefix(p, macDataVolume+"/") {
-		return p[len(macDataVolume):]
-	}
-	return p
-}
 
 // EventKind classifies a filesystem change.
 type EventKind int
