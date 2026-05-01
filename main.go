@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -26,7 +27,180 @@ func main() {
 		runTap()
 		return
 	}
+	if len(os.Args) >= 2 && os.Args[1] == "hooks" {
+		os.Args = append(os.Args[:1], os.Args[2:]...)
+		runHooks()
+		return
+	}
 	runUI()
+}
+
+func runHooks() {
+	fs := flag.NewFlagSet("hooks", flag.ExitOnError)
+	addr := fs.String("addr", "127.0.0.1:7777", "agentflash UI listen address")
+	apply := fs.Bool("apply", false, "merge into the settings file instead of printing")
+	pathFlag := fs.String("path", "~/.claude/settings.json", "settings file to print or modify")
+	_ = fs.Parse(os.Args[1:])
+
+	url := "http://" + *addr + "/api/claude/event"
+	cmd := "curl -fsS -X POST " + url +
+		" -H 'Content-Type: application/json' --data-binary @-"
+	hooksByEvent := buildHooksMap(cmd)
+
+	if !*apply {
+		block := map[string]any{"hooks": hooksByEvent}
+		out, err := json.MarshalIndent(block, "", "  ")
+		if err != nil {
+			log.Fatalf("hooks: marshal: %v", err)
+		}
+		fmt.Fprintln(os.Stderr, "# Paste this into "+*pathFlag+" (or rerun with --apply to merge automatically)."+
+			" Make sure agentflash is running on "+*addr+".")
+		fmt.Println(string(out))
+		return
+	}
+
+	target, err := expandHome(*pathFlag)
+	if err != nil {
+		log.Fatalf("hooks: %v", err)
+	}
+	changed, err := applyHooks(target, hooksByEvent, url)
+	if err != nil {
+		log.Fatalf("hooks: %v", err)
+	}
+	if changed {
+		fmt.Fprintf(os.Stderr, "hooks: wrote %s\n", target)
+	} else {
+		fmt.Fprintf(os.Stderr, "hooks: %s already up to date\n", target)
+	}
+}
+
+func buildHooksMap(cmd string) map[string][]hookEntry {
+	mk := func(matcher string) []hookEntry {
+		e := hookEntry{Hooks: []hookCmd{{Type: "command", Command: cmd, Timeout: 5}}}
+		if matcher != "" {
+			e.Matcher = matcher
+		}
+		return []hookEntry{e}
+	}
+	return map[string][]hookEntry{
+		"PreToolUse":       mk(".*"),
+		"PostToolUse":      mk(".*"),
+		"UserPromptSubmit": mk(""),
+		"SessionStart":     mk(""),
+		"Stop":             mk(""),
+		"Notification":     mk(""),
+		"SubagentStop":     mk(""),
+	}
+}
+
+// applyHooks merges our hooks into the settings file. Returns true if
+// the file was modified. Existing entries pointing at our own URL are
+// replaced; other unrelated hooks under the same event are kept.
+func applyHooks(path string, ours map[string][]hookEntry, url string) (bool, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false, fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
+	}
+	var settings map[string]any
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if len(data) > 0 {
+			if err := json.Unmarshal(data, &settings); err != nil {
+				return false, fmt.Errorf("parse %s: %w (refusing to overwrite)", path, err)
+			}
+		}
+	case os.IsNotExist(err):
+		// fresh file
+	default:
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	if settings == nil {
+		settings = map[string]any{}
+	}
+
+	hooksAny, ok := settings["hooks"].(map[string]any)
+	if !ok {
+		hooksAny = map[string]any{}
+	}
+
+	for evt, entries := range ours {
+		// Drop any prior entry whose hook[*].command points at our URL.
+		existing, _ := hooksAny[evt].([]any)
+		kept := existing[:0:0]
+		for _, e := range existing {
+			if entryReferencesURL(e, url) {
+				continue
+			}
+			kept = append(kept, e)
+		}
+		// Append our entries.
+		for _, our := range entries {
+			b, _ := json.Marshal(our)
+			var asAny any
+			_ = json.Unmarshal(b, &asAny)
+			kept = append(kept, asAny)
+		}
+		hooksAny[evt] = kept
+	}
+	settings["hooks"] = hooksAny
+
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("marshal: %w", err)
+	}
+	out = append(out, '\n')
+	// No-op if identical to existing content.
+	if len(data) > 0 && string(data) == string(out) {
+		return false, nil
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		return false, fmt.Errorf("write %s: %w", path, err)
+	}
+	return true, nil
+}
+
+func entryReferencesURL(entry any, url string) bool {
+	em, ok := entry.(map[string]any)
+	if !ok {
+		return false
+	}
+	hooks, ok := em["hooks"].([]any)
+	if !ok {
+		return false
+	}
+	for _, h := range hooks {
+		hm, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		cmd, _ := hm["command"].(string)
+		if strings.Contains(cmd, url) {
+			return true
+		}
+	}
+	return false
+}
+
+func expandHome(p string) (string, error) {
+	if !strings.HasPrefix(p, "~") {
+		return filepath.Abs(p)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, strings.TrimPrefix(p, "~")), nil
+}
+
+type hookEntry struct {
+	Matcher string    `json:"matcher,omitempty"`
+	Hooks   []hookCmd `json:"hooks"`
+}
+
+type hookCmd struct {
+	Type    string `json:"type"`
+	Command string `json:"command"`
+	Timeout int    `json:"timeout,omitempty"`
 }
 
 func runTap() {
@@ -34,6 +208,8 @@ func runTap() {
 	dir := fs.String("dir", "", "directory to watch")
 	excludePIDCSV := fs.String("exclude-pid", "", "comma-separated PIDs to drop events from")
 	excludeNameCSV := fs.String("exclude-name", "", "comma-separated process names to drop events from")
+	rawDump := fs.String("raw-dump", "", "if set, append every raw fs_usage line to this file (debug)")
+	debug := fs.Bool("debug", false, "verbose tap diagnostics")
 	_ = fs.Parse(os.Args[1:])
 	if *dir == "" {
 		fmt.Fprintln(os.Stderr, "tap: --dir is required")
@@ -44,7 +220,13 @@ func runTap() {
 		log.Fatalf("tap: --exclude-pid: %v", err)
 	}
 	names := parseNames(*excludeNameCSV)
-	cfg := tap.Config{WatchDir: *dir, ExcludePID: pids, ExcludeName: names}
+	cfg := tap.Config{
+		WatchDir:    *dir,
+		ExcludePID:  pids,
+		ExcludeName: names,
+		RawDumpFile: *rawDump,
+		Debug:       *debug,
+	}
 	if err := tap.Run(cfg, os.Stdout); err != nil {
 		log.Fatalf("tap: %v", err)
 	}
@@ -90,6 +272,8 @@ func runUI() {
 	dir := fs.String("dir", "", "directory to watch (required)")
 	addr := fs.String("addr", "127.0.0.1:7777", "HTTP listen address")
 	ringSize := fs.Int("buffer", 10000, "ring buffer size for replayed history")
+	rawDump := fs.String("raw-dump", "", "if set, append every raw fs_usage line to this path (debug)")
+	debug := fs.Bool("debug", false, "verbose diagnostics: hub stats, fsevents, ws connects, tap samples")
 	_ = fs.Parse(os.Args[1:])
 	if *dir == "" {
 		fmt.Fprintln(os.Stderr, "agentflash: --dir is required")
@@ -107,11 +291,13 @@ func runUI() {
 	defer cancel()
 
 	cfg := ui.Config{
-		Dir:       abs,
-		Addr:      *addr,
-		WebFS:     webFS,
-		WebPrefix: "web",
-		RingSize:  *ringSize,
+		Dir:         abs,
+		Addr:        *addr,
+		WebFS:       webFS,
+		WebPrefix:   "web",
+		RingSize:    *ringSize,
+		RawDumpFile: *rawDump,
+		Debug:       *debug,
 	}
 	if err := ui.Run(ctx, cfg); err != nil {
 		log.Fatalf("ui: %v", err)

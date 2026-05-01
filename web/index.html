@@ -9,6 +9,10 @@
   <header>
     <span class="brand">agentflash</span>
     <span class="dir" id="dir"></span>
+    <span id="claudeGoal" class="claude-zone" hidden>goal: <em></em></span>
+    <span id="claudeAction" class="claude-zone" hidden>do: <em></em></span>
+    <span id="claudeSub" class="claude-zone subagent" hidden>[<em></em>]</span>
+    <span id="claudeState" class="claude-zone state-idle">idle</span>
     <span class="spacer"></span>
     <button id="refresh">Refresh tree</button>
     <button id="toggle" class="primary">Stop</button>
@@ -22,20 +26,37 @@
     </label>
     <input type="text" id="filter" placeholder="filter path…" />
     <span class="status" id="status">connecting…</span>
-    <span class="status" id="counters">recv=0 drawn=0 unmapped=0</span>
+    <span class="status" id="counters" title="received total since page load · drawn this frame">received 0 · drawn 0</span>
   </header>
   <main>
-    <aside id="tree"></aside>
+    <aside id="tree">
+      <div id="treeContent"></div>
+      <div id="treeControls">
+        <button id="expandAll" title="Expand all folders recursively">Expand all</button>
+        <button id="hideHidden" title="Toggle visibility of dotfiles">Hide hidden</button>
+      </div>
+    </aside>
     <section id="canvasWrap">
       <canvas id="tape"></canvas>
       <div id="tooltip" class="hidden"></div>
       <div class="legend">
         <span class="lg lg-read"></span>read
-        <span class="lg lg-write"></span>write
+        <span class="lg lg-write"></span>modify
+        <span class="lg lg-delete"></span>delete
         <span class="lg lg-other"></span>other
       </div>
     </section>
   </main>
+  <footer id="claudePanel">
+    <div class="claude-panel-head">
+      <span>claude activity</span>
+      <span class="claude-panel-buttons">
+        <button id="claudeClear" title="Clear log">clear</button>
+        <button id="claudeHide" title="Hide panel">hide</button>
+      </span>
+    </div>
+    <div id="claudeLog"></div>
+  </footer>
   <script src="/app.js"></script>
 </body>
 </html>

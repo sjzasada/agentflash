@@ -50,13 +50,11 @@ func TestParseLine(t *testing.T) {
 			wantOK:  true,
 		},
 		{
-			name:    "unlink",
-			line:    "21:07:01.678901  unlink                              /Users/stef/junk.txt                  0.000023    rm.88888",
-			wantOp:  "unlink",
-			wantPth: "/Users/stef/junk.txt",
-			wantPrc: "rm",
-			wantPID: 88888,
-			wantOK:  true,
+			// unlink is intentionally dropped — the FSEvents-driven
+			// tree refresh shows deletion via the file disappearing.
+			name:   "unlink (dropped from timeline)",
+			line:   "21:07:01.678901  unlink                              /Users/stef/junk.txt                  0.000023    rm.88888",
+			wantOK: false,
 		},
 		{
 			name:   "header line",

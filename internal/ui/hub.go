@@ -3,7 +3,10 @@ package ui
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"agentflash/internal/event"
 )
@@ -17,17 +20,45 @@ type Hub struct {
 	ringSize   int
 	ringFilled bool
 	clients    map[*client]struct{}
+	debug      bool
+
+	bcastCount   atomic.Uint64 // total broadcasts since start
+	deliverCount atomic.Uint64 // queued frames to clients (post-drop)
+	dropCount    atomic.Uint64 // frames dropped because client buffer full
 }
 
 type client struct {
 	send chan []byte
 }
 
-func NewHub(ringSize int) *Hub {
-	return &Hub{
+func NewHub(ringSize int, debug bool) *Hub {
+	h := &Hub{
 		ring:     make([]event.Event, ringSize),
 		ringSize: ringSize,
 		clients:  make(map[*client]struct{}),
+		debug:    debug,
+	}
+	if debug {
+		go h.statsTicker()
+	}
+	return h
+}
+
+func (h *Hub) statsTicker() {
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	var prev uint64
+	for range t.C {
+		b := h.bcastCount.Load()
+		if b == prev {
+			continue
+		}
+		prev = b
+		h.mu.Lock()
+		nClients := len(h.clients)
+		h.mu.Unlock()
+		log.Printf("[hub] bcast=%d delivered=%d dropped=%d clients=%d",
+			b, h.deliverCount.Load(), h.dropCount.Load(), nClients)
 	}
 }
 
@@ -48,15 +79,29 @@ func (h *Hub) Ingest(r io.Reader) error {
 }
 
 func (h *Hub) broadcast(ev event.Event) {
+	h.send(ev, true)
+}
+
+// BroadcastTransient sends ev to all clients but does NOT add it to
+// the replay ring buffer. Used for control messages like dirchange,
+// which are only meaningful in real time.
+func (h *Hub) BroadcastTransient(ev event.Event) {
+	h.send(ev, false)
+}
+
+func (h *Hub) send(ev event.Event, store bool) {
 	data, err := json.Marshal(ev)
 	if err != nil {
 		return
 	}
+	h.bcastCount.Add(1)
 	h.mu.Lock()
-	h.ring[h.ringHead] = ev
-	h.ringHead = (h.ringHead + 1) % h.ringSize
-	if h.ringHead == 0 {
-		h.ringFilled = true
+	if store {
+		h.ring[h.ringHead] = ev
+		h.ringHead = (h.ringHead + 1) % h.ringSize
+		if h.ringHead == 0 {
+			h.ringFilled = true
+		}
 	}
 	clients := make([]*client, 0, len(h.clients))
 	for c := range h.clients {
@@ -67,8 +112,9 @@ func (h *Hub) broadcast(ev event.Event) {
 	for _, c := range clients {
 		select {
 		case c.send <- data:
+			h.deliverCount.Add(1)
 		default:
-			// Drop frame for slow client; do not block the hub.
+			h.dropCount.Add(1)
 		}
 	}
 }

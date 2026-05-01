@@ -96,20 +96,27 @@ func mapSyscall(call, args string) (string, bool) {
 		return "read", true
 	case "rename", "renameat", "renameatx_np":
 		return "rename", true
-	case "unlink", "unlinkat":
-		return "unlink", true
 	case "mkdir", "mkdirat":
 		return "mkdir", true
-	case "rmdir":
-		return "rmdir", true
+	// unlink, unlinkat, rmdir are intentionally dropped from the
+	// timeline: the tree-disappearance driven by FSEvents is the
+	// visual signal for deletion.
 	case "link", "linkat", "symlink", "symlinkat":
 		return "write", true
 	case "truncate":
 		return "write", true
 	case "chmod", "fchmodat":
 		return "write", true
-	case "utimes", "utimensat", "futimes", "futimens":
+	case "utimes", "utimensat", "futimes", "futimens", "lutimes":
 		// `touch` on an existing file uses these to bump mtime/atime.
+		return "write", true
+	case "setattrlist", "setattrlistat", "fsetattrlist":
+		// macOS-specific bulk metadata setter; used by some tools to
+		// bump mtime/atime/etc.
+		return "write", true
+	case "chflags", "fchflags", "lchflags", "chflagsat":
+		return "write", true
+	case "chown", "fchown", "lchown", "fchownat":
 		return "write", true
 	}
 	return "", false

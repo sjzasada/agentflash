@@ -7,6 +7,7 @@
   --accent: #4aa3ff;
   --read: #4aa3ff;
   --write: #ff5c5c;
+  --delete: #f0883e;
   --other: #888;
   --border: #30363d;
 }
@@ -23,7 +24,7 @@ html, body {
 
 body {
   display: grid;
-  grid-template-rows: 44px 1fr;
+  grid-template-rows: 44px 1fr 200px;
 }
 
 header {
@@ -89,6 +90,45 @@ header input {
   font-family: ui-monospace, monospace;
 }
 
+.claude-zone {
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 11px;
+  color: var(--fg);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  max-width: 240px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.claude-zone em {
+  font-style: normal;
+  color: var(--accent);
+}
+
+.claude-zone.fading {
+  opacity: 0.5;
+  transition: opacity 400ms ease-out;
+}
+
+.claude-zone.subagent em {
+  color: #79c0ff;
+}
+
+#claudeState {
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.state-idle    { color: var(--fg-dim); }
+.state-working { color: #3fb950; border-color: #3fb950; }
+.state-waiting { color: #d29922; border-color: #d29922; }
+
 main {
   display: grid;
   grid-template-columns: 280px 1fr;
@@ -98,9 +138,48 @@ main {
 #tree {
   background: var(--bg-2);
   border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#treeContent {
+  flex: 1;
   overflow: auto;
   padding: 8px 0;
 }
+
+#treeControls {
+  border-top: 1px solid var(--border);
+  padding: 8px;
+  display: flex;
+  gap: 6px;
+  background: var(--bg-2);
+}
+
+#treeControls button {
+  flex: 1;
+  background: var(--bg-3);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font: 11px ui-monospace, monospace;
+  cursor: pointer;
+}
+
+#treeControls button:hover {
+  background: var(--border);
+}
+
+#treeControls button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #001;
+  font-weight: 600;
+}
+
+#tree.hide-hidden .hidden-entry { display: none; }
 
 #tree ul {
   list-style: none;
@@ -203,4 +282,87 @@ main {
 }
 .lg-read { background: var(--read); }
 .lg-write { background: var(--write); }
+.lg-delete { background: var(--delete); }
 .lg-other { background: var(--other); }
+
+/* ---- Claude activity panel (bottom of screen) ---- */
+
+#claudePanel {
+  background: var(--bg-2);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.claude-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px;
+  background: var(--bg-3);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.claude-panel-buttons {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.claude-panel-head button {
+  background: transparent;
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 8px;
+  font: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  cursor: pointer;
+}
+.claude-panel-head button:hover { color: var(--fg); }
+
+body.claude-collapsed { grid-template-rows: 44px 1fr 28px; }
+body.claude-collapsed #claudeLog { display: none; }
+
+#claudeLog {
+  flex: 1;
+  overflow-y: auto;
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 11px;
+}
+
+#claudeLog .row {
+  display: grid;
+  grid-template-columns: 80px 70px 90px 1fr;
+  gap: 10px;
+  padding: 2px 12px;
+  border-bottom: 1px solid #1a1f26;
+  align-items: baseline;
+}
+#claudeLog .row:hover { background: var(--bg-3); }
+
+#claudeLog .time { color: var(--fg-dim); }
+#claudeLog .phase { font-weight: 600; }
+#claudeLog .tool  { color: var(--fg); }
+#claudeLog .body  { color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+#claudeLog .row.subagent .tool { color: #79c0ff; }
+
+.phase-pre           { color: #3fb950; }
+.phase-post          { color: #6e7681; }
+.phase-user_prompt   { color: var(--accent); }
+.phase-stop          { color: #d29922; }
+.phase-notification  { color: #d29922; }
+.phase-session_start { color: var(--fg-dim); }
+.phase-subagent_stop { color: #79c0ff; }
+
+#claudeLog .empty {
+  padding: 12px;
+  color: var(--fg-dim);
+  font-style: italic;
+}

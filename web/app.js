@@ -9,9 +9,30 @@
   const statusEl = el("status");
   const countersEl = el("counters");
   const treeEl = el("tree");
+  const treeContent = el("treeContent");
+  const expandAllBtn = el("expandAll");
+  const hideHiddenBtn = el("hideHidden");
   const dirEl = el("dir");
+  const claudeGoalEl = el("claudeGoal");
+  const claudeActionEl = el("claudeAction");
+  const claudeSubEl = el("claudeSub");
+  const claudeStateEl = el("claudeState");
+  const claudeLogEl = el("claudeLog");
+  const claudeClearBtn = el("claudeClear");
+  const claudeHideBtn = el("claudeHide");
 
   const ctx = tapeCanvas.getContext("2d");
+
+  const CLAUDE_LOG_MAX = 500;
+  const CLAUDE_PHASE_LABEL = {
+    pre: "PRE",
+    post: "POST",
+    user_prompt: "PROMPT",
+    session_start: "START",
+    stop: "STOP",
+    subagent_stop: "SUB-END",
+    notification: "NOTIF",
+  };
 
   const state = {
     events: [],
@@ -24,7 +45,18 @@
     nodes: new Map(),
     pendingRefresh: new Set(),
     refreshTimer: null,
-    counters: { recv: 0, drawn: 0, unmapped: 0 },
+    counters: { recv: 0, drawn: 0 },
+    claude: {
+      goal: null,
+      action: null,        // { tool, summary, ts }
+      subagentType: null,
+      state: "idle",       // idle | working | waiting
+      events: [],          // recent claude events for the lane (op === "claude")
+      maxEvents: 500,
+      actionDimTimer: null,
+      idleTimer: null,     // schedules transition to "waiting" after silence
+      activeTools: 0,      // count of in-flight tool calls (pre - post)
+    },
   };
 
   // ---------- WebSocket ----------
@@ -41,6 +73,15 @@
     ws.onmessage = (ev) => {
       try {
         const e = JSON.parse(ev.data);
+        if (e.op === "dirchange") {
+          const rel = relFromFull(e.path);
+          if (rel !== null) scheduleRefresh(rel);
+          return;
+        }
+        if (e.op === "claude") {
+          handleClaudeEvent(e);
+          return;
+        }
         e._t = new Date(e.ts).getTime();
         state.events.push(e);
         state.counters.recv++;
@@ -57,6 +98,187 @@
     return op === "write" || op === "rename" || op === "unlink" || op === "mkdir" || op === "rmdir";
   }
 
+  // ---------- Claude events ----------
+
+  // State is driven by activity, not by Stop/Notification (which fire
+  // at unreliable times across Claude versions and were inverting the
+  // pill in practice). UserPromptSubmit / PreToolUse / PostToolUse
+  // mark "working" and arm a CLAUDE_IDLE_MS idle timer. The timer
+  // only flips to "waiting" when no tool calls are currently in
+  // flight — long-running tools (e.g. a 30 s Bash) keep the pill
+  // green for the duration.
+  const CLAUDE_IDLE_MS = 5000;
+
+  function pingClaudeActive() {
+    setStateLabel("working");
+    armIdleTimer();
+  }
+
+  function armIdleTimer() {
+    if (state.claude.idleTimer) clearTimeout(state.claude.idleTimer);
+    state.claude.idleTimer = setTimeout(checkIdleOrReschedule, CLAUDE_IDLE_MS);
+  }
+
+  function checkIdleOrReschedule() {
+    if (state.claude.activeTools > 0) {
+      // Tool(s) still in flight — keep waiting for their PostToolUse.
+      state.claude.idleTimer = setTimeout(checkIdleOrReschedule, CLAUDE_IDLE_MS);
+      return;
+    }
+    setStateLabel("waiting");
+  }
+
+  function handleClaudeEvent(e) {
+    const ts = new Date(e.ts).getTime();
+    const c = e.claude || {};
+    const entry = { ts, ...c };
+    state.claude.events.push(entry);
+    if (state.claude.events.length > state.claude.maxEvents) {
+      state.claude.events.splice(0, state.claude.events.length - state.claude.maxEvents);
+    }
+    appendClaudeLogRow(entry);
+    switch (c.phase) {
+      case "user_prompt":
+        state.claude.goal = c.summary || c.prompt || "";
+        state.claude.action = null;
+        state.claude.subagentType = null;
+        pingClaudeActive();
+        break;
+      case "pre":
+        state.claude.activeTools++;
+        state.claude.action = {
+          tool: c.tool || "",
+          summary: c.summary || c.tool || "",
+          fullPath: c.filePath || "",
+          command: c.command || "",
+          prompt: c.prompt || "",
+        };
+        if (c.tool === "Task" && c.subagentType) {
+          state.claude.subagentType = c.subagentType;
+        }
+        pingClaudeActive();
+        scheduleActionDim();
+        break;
+      case "post":
+        state.claude.activeTools = Math.max(0, state.claude.activeTools - 1);
+        pingClaudeActive();
+        scheduleActionDim();
+        break;
+      case "session_start":
+        state.claude.goal = null;
+        state.claude.action = null;
+        state.claude.subagentType = null;
+        state.claude.activeTools = 0;
+        if (state.claude.idleTimer) clearTimeout(state.claude.idleTimer);
+        setStateLabel("idle");
+        break;
+      case "subagent_stop":
+        state.claude.subagentType = null;
+        break;
+      // stop / notification: ignored for state purposes (logged in panel).
+    }
+    renderClaudeChips();
+  }
+
+  function appendClaudeLogRow(entry) {
+    const placeholder = claudeLogEl.querySelector(".empty");
+    if (placeholder) placeholder.remove();
+
+    const row = document.createElement("div");
+    row.className = "row";
+    if (entry.subagentType) row.classList.add("subagent");
+
+    const time = new Date(entry.ts).toISOString().slice(11, 19);
+    const phase = CLAUDE_PHASE_LABEL[entry.phase] || entry.phase || "";
+    let toolLabel = entry.tool || "";
+    if (entry.subagentType) toolLabel = "[" + entry.subagentType + "]" + (toolLabel ? " " + toolLabel : "");
+    let bodyText = entry.summary || "";
+    if (entry.tool === "Read" || entry.tool === "Edit" || entry.tool === "Write" || entry.tool === "NotebookEdit") {
+      bodyText = entry.filePath || bodyText;
+    } else if (entry.tool === "Bash") {
+      bodyText = entry.command || bodyText;
+    } else if (entry.phase === "user_prompt" && entry.prompt) {
+      bodyText = entry.prompt;
+    }
+
+    row.innerHTML = "";
+    const t = document.createElement("span"); t.className = "time"; t.textContent = time;
+    const p = document.createElement("span"); p.className = "phase phase-" + entry.phase; p.textContent = phase;
+    const tool = document.createElement("span"); tool.className = "tool"; tool.textContent = toolLabel;
+    const body = document.createElement("span"); body.className = "body"; body.textContent = bodyText;
+    row.append(t, p, tool, body);
+
+    const tip = [phase, toolLabel, bodyText, entry.filePath, entry.prompt].filter(Boolean).join("\n");
+    row.title = tip;
+
+    claudeLogEl.prepend(row);
+
+    while (claudeLogEl.children.length > CLAUDE_LOG_MAX) {
+      claudeLogEl.removeChild(claudeLogEl.lastChild);
+    }
+  }
+
+  if (claudeClearBtn) {
+    claudeClearBtn.addEventListener("click", () => {
+      claudeLogEl.innerHTML = '<div class="empty">no claude activity yet</div>';
+    });
+  }
+  if (claudeHideBtn) {
+    claudeHideBtn.addEventListener("click", () => {
+      const collapsed = document.body.classList.toggle("claude-collapsed");
+      claudeHideBtn.textContent = collapsed ? "show" : "hide";
+      claudeHideBtn.title = collapsed ? "Show panel" : "Hide panel";
+    });
+  }
+  // Initial placeholder.
+  claudeLogEl.innerHTML = '<div class="empty">no claude activity yet</div>';
+
+  function setStateLabel(s) {
+    state.claude.state = s;
+    claudeStateEl.classList.remove("state-idle", "state-working", "state-waiting");
+    claudeStateEl.classList.add("state-" + s);
+    claudeStateEl.textContent = s;
+  }
+
+  function renderClaudeChips() {
+    if (state.claude.goal) {
+      claudeGoalEl.hidden = false;
+      claudeGoalEl.querySelector("em").textContent = state.claude.goal;
+      claudeGoalEl.title = state.claude.goal;
+    } else {
+      claudeGoalEl.hidden = true;
+    }
+    if (state.claude.action) {
+      claudeActionEl.hidden = false;
+      claudeActionEl.classList.remove("fading");
+      claudeActionEl.querySelector("em").textContent = state.claude.action.summary;
+      const tip = [
+        state.claude.action.tool,
+        state.claude.action.summary,
+        state.claude.action.fullPath,
+        state.claude.action.command,
+        state.claude.action.prompt && "prompt: " + state.claude.action.prompt,
+      ].filter(Boolean).join("\n");
+      claudeActionEl.title = tip;
+    } else {
+      claudeActionEl.hidden = true;
+    }
+    if (state.claude.subagentType) {
+      claudeSubEl.hidden = false;
+      claudeSubEl.querySelector("em").textContent = state.claude.subagentType;
+      claudeSubEl.title = "subagent: " + state.claude.subagentType;
+    } else {
+      claudeSubEl.hidden = true;
+    }
+  }
+
+  function scheduleActionDim() {
+    if (state.claude.actionDimTimer) clearTimeout(state.claude.actionDimTimer);
+    state.claude.actionDimTimer = setTimeout(() => {
+      claudeActionEl.classList.add("fading");
+    }, 5000);
+  }
+
   // ---------- Canvas ----------
 
   function resizeCanvas() {
@@ -68,9 +290,25 @@
   }
   window.addEventListener("resize", resizeCanvas);
 
+  // Three intent buckets:
+  //   read   — file content was read
+  //   modify — file content/metadata was modified or file/dir created
+  //   delete — file/dir was removed
+  // Anything unknown stays grey so it's visible but stands out.
+  const MODIFY_OPS = new Set([
+    "write", "rename", "mkdir", "truncate", "chmod", "chown",
+    "utimes", "utimensat", "futimes", "futimens", "lutimes",
+    "setattrlist", "setattrlistat", "fsetattrlist",
+    "chflags", "fchflags", "lchflags", "chflagsat",
+    "fchown", "lchown", "fchownat", "fchmodat",
+    "link", "linkat", "symlink", "symlinkat",
+  ]);
+  const DELETE_OPS = new Set(["unlink", "rmdir"]);
+
   function colorFor(op) {
     if (op === "read") return "#4aa3ff";
-    if (op === "write") return "#ff5c5c";
+    if (MODIFY_OPS.has(op)) return "#ff5c5c";
+    if (DELETE_OPS.has(op)) return "#f0883e";
     return "#888";
   }
 
@@ -94,10 +332,10 @@
   }
 
   // Walk path components from leaf to root looking for a row that's
-  // currently visible (rendered + ancestors expanded). If nothing
-  // matches (e.g. file lives in a collapsed subfolder, or path is the
-  // watch root itself which has no LI), fall back to a fixed "unmapped"
-  // zone at the top of the canvas so the user still sees activity.
+  // currently visible (rendered + ancestors expanded). Returns null if
+  // nothing matches — the marker is skipped this frame and will start
+  // rendering once the file's tree row appears (e.g. after the
+  // FSEvents-driven dirchange refresh propagates).
   function yForPath(rel, rowYMap) {
     if (rel === null) return null;
     if (rowYMap.has(rel)) return rowYMap.get(rel);
@@ -107,7 +345,7 @@
       cur = i < 0 ? "" : cur.slice(0, i);
       if (rowYMap.has(cur)) return rowYMap.get(cur);
     }
-    return 6; // unmapped — drawn just under the top edge
+    return null;
   }
 
   function draw() {
@@ -136,15 +374,14 @@
     lastDraw = [];
     const tickH = 14;
     let drawn = 0;
-    let unmapped = 0;
 
+    // File-activity ticks (fs_usage + FSEvents).
     for (const e of state.events) {
       if (e._t < minT) continue;
       if (filter && !e.path.includes(filter)) continue;
       const rel = relFromFull(e.path);
       const y = yForPath(rel, rowYMap);
       if (y === null) continue;
-      if (rel !== null && !rowYMap.has(rel)) unmapped++;
       const x = w - ((now - e._t) / windowMs) * w;
       ctx.strokeStyle = colorFor(e.op);
       ctx.lineWidth = 2;
@@ -155,9 +392,9 @@
       lastDraw.push({ x, y, e, tickH });
       drawn++;
     }
+
     state.counters.drawn = drawn;
-    state.counters.unmapped = unmapped;
-    countersEl.textContent = `recv=${state.counters.recv} drawn=${drawn} unmapped=${unmapped}`;
+    countersEl.textContent = `received ${state.counters.recv} · drawn ${drawn}`;
   }
 
   function loop() {
@@ -229,11 +466,8 @@
     return i < 0 ? "" : rel.slice(0, i);
   }
 
-  function scheduleParentRefresh(fullPath) {
-    const rel = relFromFull(fullPath);
-    if (rel === null) return;
-    const par = parentRel(rel);
-    state.pendingRefresh.add(par);
+  function scheduleRefresh(rel) {
+    state.pendingRefresh.add(rel);
     if (state.refreshTimer) return;
     state.refreshTimer = setTimeout(() => {
       const dirs = Array.from(state.pendingRefresh);
@@ -241,6 +475,12 @@
       state.refreshTimer = null;
       for (const d of dirs) refreshDir(d);
     }, 300);
+  }
+
+  function scheduleParentRefresh(fullPath) {
+    const rel = relFromFull(fullPath);
+    if (rel === null) return;
+    scheduleRefresh(parentRel(rel));
   }
 
   async function refreshDir(rel) {
@@ -387,20 +627,99 @@
     } else if (node.childUl) {
       node.childUl.style.display = "none";
     }
+    updateExpandButton();
   }
 
   function renderTreeRoot() {
-    treeEl.innerHTML = "";
+    treeContent.innerHTML = "";
     const ul = document.createElement("ul");
-    treeEl.appendChild(ul);
+    treeContent.appendChild(ul);
     // Register a synthetic root node so refreshAllExpanded can find it.
     state.nodes.set("", { li: null, childUl: ul, expanded: true, isDir: true });
-    fetchTree("").then((entries) => {
+    return fetchTree("").then((entries) => {
       for (const ent of entries) ul.appendChild(makeNode(ent, ""));
     }).catch((err) => {
-      treeEl.textContent = "tree error: " + err.message;
+      treeContent.textContent = "tree error: " + err.message;
     });
   }
+
+  // Recursively expand every directory currently in the tree (BFS).
+  // Each toggleDir is awaited because it lazy-fetches children, and
+  // those children become candidates for expansion on the next pass.
+  async function expandAll() {
+    expandAllBtn.disabled = true;
+    try {
+      const queue = [];
+      for (const [rel, node] of state.nodes) {
+        if (rel !== "" && node.isDir && !node.expanded) {
+          queue.push({ rel, node });
+        }
+      }
+      while (queue.length > 0) {
+        const { rel, node } = queue.shift();
+        const tri = node.li && node.li.querySelector(":scope > .row > .triangle");
+        if (!tri || node.expanded) continue;
+        await toggleDir(rel, node, tri);
+        if (node.childUl) {
+          for (const li of node.childUl.children) {
+            if (li.tagName !== "LI" || !li.classList.contains("dir")) continue;
+            const childRel = li.dataset.rel;
+            const childNode = state.nodes.get(childRel);
+            if (childNode && !childNode.expanded) {
+              queue.push({ rel: childRel, node: childNode });
+            }
+          }
+        }
+      }
+    } finally {
+      expandAllBtn.disabled = false;
+      updateExpandButton();
+    }
+  }
+
+  function collapseAll() {
+    for (const [rel, node] of state.nodes) {
+      if (rel === "" || !node.isDir || !node.expanded) continue;
+      const tri = node.li && node.li.querySelector(":scope > .row > .triangle");
+      if (!tri) continue;
+      node.expanded = false;
+      tri.textContent = "▸";
+      if (node.childUl) node.childUl.style.display = "none";
+    }
+    updateExpandButton();
+  }
+
+  function isFullyExpanded() {
+    let total = 0, expanded = 0;
+    for (const [rel, node] of state.nodes) {
+      if (rel !== "" && node.isDir) {
+        total++;
+        if (node.expanded) expanded++;
+      }
+    }
+    return total > 0 && expanded === total;
+  }
+
+  function updateExpandButton() {
+    const all = isFullyExpanded();
+    expandAllBtn.textContent = all ? "Collapse all" : "Expand all";
+    expandAllBtn.classList.toggle("active", all);
+  }
+
+  expandAllBtn.addEventListener("click", async () => {
+    if (isFullyExpanded()) {
+      collapseAll();
+    } else {
+      await expandAll();
+    }
+  });
+
+  hideHiddenBtn.addEventListener("click", () => {
+    const hide = !treeEl.classList.contains("hide-hidden");
+    treeEl.classList.toggle("hide-hidden", hide);
+    hideHiddenBtn.classList.toggle("active", hide);
+    hideHiddenBtn.textContent = hide ? "Show hidden" : "Hide hidden";
+  });
 
   function flashTreeNode(fullPath) {
     if (!state.rootDir || !fullPath.startsWith(state.rootDir + "/")) return;
@@ -427,8 +746,19 @@
     }
   }).catch(() => {});
 
+  // Sync state from form fields whose values the browser may have
+  // restored on refresh (the DOM <option selected> default doesn't
+  // override Firefox/Chrome's session-form-state restoration).
+  state.windowSec = parseInt(windowSel.value, 10) || state.windowSec;
+  state.filter = filterInput.value.trim();
+
+  // Default UI state on load: hide dotfiles and fully expand the tree.
+  treeEl.classList.add("hide-hidden");
+  hideHiddenBtn.classList.add("active");
+  hideHiddenBtn.textContent = "Show hidden";
+
   resizeCanvas();
   connectWS();
-  renderTreeRoot();
+  renderTreeRoot().then(() => expandAll());
   requestAnimationFrame(loop);
 })();

@@ -14,18 +14,26 @@ import (
 // subprocess (and therefore fs_usage). Stderr is inherited so the sudo
 // password prompt and any fs_usage errors land on the parent terminal.
 // The UI's PID is passed via --exclude-pid so the tap drops events
-// caused by our own directory listings.
-func SpawnTap(dir string) (io.ReadCloser, func() error, error) {
+// caused by our own directory listings. rawDumpFile, if non-empty, is
+// forwarded as --raw-dump for debugging.
+func SpawnTap(dir, rawDumpFile string, debug bool) (io.ReadCloser, func() error, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve self: %w", err)
 	}
-	cmd := exec.Command(
-		"sudo", "--", self, "__tap",
+	args := []string{
+		"--", self, "__tap",
 		"--dir", dir,
 		"--exclude-pid", strconv.Itoa(os.Getpid()),
 		"--exclude-name", filepath.Base(self),
-	)
+	}
+	if rawDumpFile != "" {
+		args = append(args, "--raw-dump", rawDumpFile)
+	}
+	if debug {
+		args = append(args, "--debug")
+	}
+	cmd := exec.Command("sudo", args...)
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin // sudo needs a tty for the password prompt
 	stdout, err := cmd.StdoutPipe()

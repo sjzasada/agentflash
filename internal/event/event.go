@@ -8,11 +8,28 @@ import (
 )
 
 type Event struct {
-	TS      time.Time `json:"ts"`
-	Op      string    `json:"op"`
-	Path    string    `json:"path"`
-	Process string    `json:"process"`
-	PID     int       `json:"pid"`
+	TS      time.Time   `json:"ts"`
+	Op      string      `json:"op"`
+	Path    string      `json:"path,omitempty"`
+	Process string      `json:"process,omitempty"`
+	PID     int         `json:"pid,omitempty"`
+	Claude  *ClaudeInfo `json:"claude,omitempty"`
+}
+
+// ClaudeInfo is the structured payload for op="claude" events. Only
+// the Phase field is always set; the rest are populated based on the
+// hook event type and tool name.
+type ClaudeInfo struct {
+	Phase        string `json:"phase"` // pre|post|user_prompt|session_start|stop|notification|subagent_stop
+	Tool         string `json:"tool,omitempty"`
+	Summary      string `json:"summary,omitempty"`
+	FilePath     string `json:"filePath,omitempty"`
+	Command      string `json:"command,omitempty"`
+	Pattern      string `json:"pattern,omitempty"`
+	SubagentType string `json:"subagentType,omitempty"`
+	Prompt       string `json:"prompt,omitempty"`
+	SessionID    string `json:"sessionId,omitempty"`
+	CWD          string `json:"cwd,omitempty"`
 }
 
 type Writer struct {

@@ -21,6 +21,8 @@ type Config struct {
 	WatchDir    string
 	ExcludePID  []int    // event.PID matching any of these is dropped
 	ExcludeName []string // process names (in addition to the hardcoded macOS noise list)
+	RawDumpFile string   // if non-empty, every fs_usage line is appended to this path
+	Debug       bool     // verbose diagnostics: stats, [unparsed], [filtered], [kept], [interesting]
 }
 
 // Run spawns fs_usage, parses its output, filters events whose path is
@@ -38,7 +40,8 @@ func Run(cfg Config, out io.Writer) error {
 	}
 
 	logger := log.New(os.Stderr, "[tap] ", log.LstdFlags)
-	logger.Printf("starting fs_usage (watch prefix=%q)", prefix)
+	dlog := &debugLogger{on: cfg.Debug, l: logger}
+	dlog.Printf("starting fs_usage (watch prefix=%q)", prefix)
 
 	cmd := exec.Command("fs_usage", "-w", "-f", "filesys")
 	cmd.Stderr = os.Stderr
@@ -49,7 +52,7 @@ func Run(cfg Config, out io.Writer) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start fs_usage: %w", err)
 	}
-	logger.Printf("fs_usage pid=%d", cmd.Process.Pid)
+	dlog.Printf("fs_usage pid=%d", cmd.Process.Pid)
 
 	excludePIDs := make(map[int]struct{})
 	for _, p := range cfg.ExcludePID {
@@ -67,7 +70,19 @@ func Run(cfg Config, out io.Writer) error {
 	for _, n := range cfg.ExcludeName {
 		excludeNames[n] = struct{}{}
 	}
-	logger.Printf("excluding pids=%v names=%v", keysOf(excludePIDs), nameKeys(excludeNames))
+	dlog.Printf("excluding pids=%v names=%v", keysOf(excludePIDs), nameKeys(excludeNames))
+
+	var rawDump *os.File
+	if cfg.RawDumpFile != "" {
+		f, err := os.Create(cfg.RawDumpFile)
+		if err != nil {
+			logger.Printf("raw-dump: cannot open %s: %v", cfg.RawDumpFile, err)
+		} else {
+			rawDump = f
+			defer rawDump.Close()
+			logger.Printf("raw-dump: writing to %s", cfg.RawDumpFile)
+		}
+	}
 
 	w := event.NewWriter(out)
 	sc := bufio.NewScanner(stdout)
@@ -85,30 +100,37 @@ func Run(cfg Config, out io.Writer) error {
 	filteredSamples := 0
 	interestingSamples := 0
 	const maxSamples = 200
-	const maxInteresting = 500
+	const maxInteresting = 1000
 
-	go statsTicker(logger, &lines, &parsed, &kept, &dropped, &excluded)
+	if cfg.Debug {
+		go statsTicker(logger, &lines, &parsed, &kept, &dropped, &excluded)
+	}
 
-	// Use the watch dir's basename as a substring trigger. We intentionally
-	// match on basename (rather than the full prefix) because fs_usage may
-	// emit firmlink-prefixed paths (`/System/Volumes/Data/...`) that won't
-	// startsWith our prefix but still mention the basename.
-	watchBase := filepath.Base(abs)
+	// We match raw lines on `/<watchBase>` (with leading slash) so we
+	// catch path mentions but skip lines where `<watchBase>` only
+	// appears as part of our own process name `agentflash.PID`.
+	pathTrigger := "/" + filepath.Base(abs)
+	dataPathTrigger := macDataVolume + pathTrigger
 
 	for sc.Scan() {
 		line := sc.Text()
 		lines.Add(1)
-		// Diagnostic: any raw line that mentions the watch dir basename,
+		if rawDump != nil {
+			rawDump.WriteString(line)
+			rawDump.WriteString("\n")
+		}
+		// Diagnostic: any raw line that mentions the watch dir path,
 		// even if it never parses or gets filtered out, gets logged so
 		// we can see the ground truth for things like cat / touch.
-		if interestingSamples < maxInteresting && strings.Contains(line, watchBase) {
+		if cfg.Debug && interestingSamples < maxInteresting &&
+			(strings.Contains(line, pathTrigger) || strings.Contains(line, dataPathTrigger)) {
 			logger.Printf("[interesting] %s", line)
 			interestingSamples++
 		}
 		now := time.Now()
 		ev, ok := ParseLine(line, now)
 		if !ok {
-			if unparsedSamples < maxSamples && len(line) > 0 && !isNoiseLine(line) {
+			if cfg.Debug && unparsedSamples < maxSamples && len(line) > 0 && !isNoiseLine(line) {
 				logger.Printf("[unparsed] %s", line)
 				unparsedSamples++
 			}
@@ -119,7 +141,7 @@ func Run(cfg Config, out io.Writer) error {
 		ev.Path = normalizePath(ev.Path)
 		if !pathIn(ev.Path, abs, prefix) {
 			dropped.Add(1)
-			if filteredSamples < maxSamples {
+			if cfg.Debug && filteredSamples < maxSamples {
 				logger.Printf("[filtered] %s %s %s.%d", ev.Op, ev.Path, ev.Process, ev.PID)
 				filteredSamples++
 			}
@@ -134,7 +156,7 @@ func Run(cfg Config, out io.Writer) error {
 			continue
 		}
 		kept.Add(1)
-		if parsedSamples < maxSamples {
+		if cfg.Debug && parsedSamples < maxSamples {
 			logger.Printf("[kept] %s %s %s.%d", ev.Op, ev.Path, ev.Process, ev.PID)
 			parsedSamples++
 		}
