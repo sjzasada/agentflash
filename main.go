@@ -21,11 +21,16 @@ import (
 //go:embed web
 var webFS embed.FS
 
+var version = "dev" // set via -ldflags "-X main.version=..." at build time
+
 func main() {
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
 		case "-h", "--help", "help":
 			printTopLevelHelp(os.Stdout)
+			return
+		case "--version", "-version", "version":
+			fmt.Println(version)
 			return
 		case "__tap":
 			os.Args = append(os.Args[:1], os.Args[2:]...)

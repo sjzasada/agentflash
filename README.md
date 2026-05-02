@@ -64,6 +64,33 @@ No extra packages are needed — fanotify is part of the kernel and we call it d
 - **Kubernetes / remote dev environments**: if the project directory is a network-backed volume (NFS, CIFS, or a CSI driver backed by one), the NFS caveat above applies.
 - **WSL2**: the Linux fanotify tap works inside WSL2, but files accessed through the `/mnt/c/…` Windows interop path are on a FUSE-backed mount (`9p`) and subject to the same remote-write visibility limitation.
 
+## Install
+
+Download a pre-built binary from the [releases page](https://github.com/sjzasada/agentflash/releases):
+
+```sh
+# macOS — Apple Silicon (M1/M2/M3)
+curl -fsSL https://github.com/sjzasada/agentflash/releases/latest/download/agentflash_latest_darwin_arm64.tar.gz | tar xz
+sudo mv agentflash /usr/local/bin/
+
+# macOS — Intel
+curl -fsSL https://github.com/sjzasada/agentflash/releases/latest/download/agentflash_latest_darwin_amd64.tar.gz | tar xz
+sudo mv agentflash /usr/local/bin/
+
+# Linux — amd64
+curl -fsSL https://github.com/sjzasada/agentflash/releases/latest/download/agentflash_latest_linux_amd64.tar.gz | tar xz
+sudo mv agentflash /usr/local/bin/
+
+# Linux — arm64
+curl -fsSL https://github.com/sjzasada/agentflash/releases/latest/download/agentflash_latest_linux_arm64.tar.gz | tar xz
+sudo mv agentflash /usr/local/bin/
+```
+
+Replace `latest` with a specific version tag (e.g. `v1.0.0`) to pin a release.
+Each release includes a `checksums.txt` for SHA-256 verification.
+
+Verify your install: `agentflash --version`
+
 ## Build & run
 
 ```sh
