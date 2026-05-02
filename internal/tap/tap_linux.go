@@ -37,6 +37,10 @@ func Run(cfg Config, out io.Writer) error {
 	dlog := &debugLogger{on: cfg.Debug, l: logger}
 	dlog.Printf("starting fanotify (watch prefix=%q)", prefix)
 
+	if fsName := networkFSName(abs); fsName != "" {
+		logger.Printf("warning: %s is on a %s filesystem — fanotify only observes I/O initiated by this host; writes from remote clients will not appear", abs, fsName)
+	}
+
 	dev, err := newFanotifyDevice()
 	if err != nil {
 		return err
@@ -170,6 +174,28 @@ func Run(cfg Config, out io.Writer) error {
 			}
 		}
 	}
+}
+
+// networkFSName returns a human-readable filesystem name if path is on
+// a network filesystem, or "" for local filesystems. Uses statfs so it
+// works without any external dependencies.
+func networkFSName(path string) string {
+	var st unix.Statfs_t
+	if err := unix.Statfs(path, &st); err != nil {
+		return ""
+	}
+	switch st.Type {
+	case 0x6969:             // NFS_SUPER_MAGIC (NFSv2/v3/v4)
+		return "NFS"
+	case 0xFF534D42,         // CIFS_MAGIC_NUMBER (SMBv1)
+		0xFE534D42:          // SMB2_MAGIC_NUMBER
+		return "CIFS/SMB"
+	case 0x65735546:         // FUSE_SUPER_MAGIC
+		return "FUSE"
+	case 0xBEEFDEAD:        // VMHGFS (VMware shared folders)
+		return "VMHGFS"
+	}
+	return ""
 }
 
 // opFromMask maps a fanotify event mask to our op enum, mirroring the

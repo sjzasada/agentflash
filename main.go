@@ -22,22 +22,39 @@ import (
 var webFS embed.FS
 
 func main() {
-	if len(os.Args) >= 2 && os.Args[1] == "__tap" {
-		os.Args = append(os.Args[:1], os.Args[2:]...)
-		runTap()
-		return
-	}
-	if len(os.Args) >= 2 && os.Args[1] == "hooks" {
-		os.Args = append(os.Args[:1], os.Args[2:]...)
-		runHooks()
-		return
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "-h", "--help", "help":
+			printTopLevelHelp(os.Stdout)
+			return
+		case "__tap":
+			os.Args = append(os.Args[:1], os.Args[2:]...)
+			runTap()
+			return
+		case "hooks":
+			os.Args = append(os.Args[:1], os.Args[2:]...)
+			runHooks()
+			return
+		}
 	}
 	runUI()
 }
 
+func printTopLevelHelp(w *os.File) {
+	fmt.Fprint(w, `agentflash — real-time visualizer of filesystem activity
+
+Usage:
+  agentflash --dir <path> [flags]    run the UI (default)
+  agentflash hooks [flags]           print or merge Claude Code hooks
+  agentflash __tap ...               internal; spawned by the UI under sudo
+
+Run "agentflash <subcommand> --help" for per-subcommand flags.
+`)
+}
+
 func runHooks() {
 	fs := flag.NewFlagSet("hooks", flag.ExitOnError)
-	addr := fs.String("addr", "127.0.0.1:7777", "agentflash UI listen address")
+	addr := fs.String("addr", "127.0.0.1:7777", "address of the running agentflash UI to post events to")
 	apply := fs.Bool("apply", false, "merge into the settings file instead of printing")
 	pathFlag := fs.String("path", "~/.claude/settings.json", "settings file to print or modify")
 	_ = fs.Parse(os.Args[1:])
@@ -205,11 +222,11 @@ type hookCmd struct {
 
 func runTap() {
 	fs := flag.NewFlagSet("__tap", flag.ExitOnError)
-	dir := fs.String("dir", "", "directory to watch")
+	dir := fs.String("dir", "", "directory to watch (required)")
 	excludePIDCSV := fs.String("exclude-pid", "", "comma-separated PIDs to drop events from")
 	excludeNameCSV := fs.String("exclude-name", "", "comma-separated process names to drop events from")
-	rawDump := fs.String("raw-dump", "", "if set, append every raw fs_usage line to this file (debug)")
-	debug := fs.Bool("debug", false, "verbose tap diagnostics")
+	rawDump := fs.String("raw-dump", "", "append every raw kernel-tap line to this file (debug)")
+	debug := fs.Bool("debug", false, "verbose diagnostics")
 	_ = fs.Parse(os.Args[1:])
 	if *dir == "" {
 		fmt.Fprintln(os.Stderr, "tap: --dir is required")
@@ -272,8 +289,8 @@ func runUI() {
 	dir := fs.String("dir", "", "directory to watch (required)")
 	addr := fs.String("addr", "127.0.0.1:7777", "HTTP listen address")
 	ringSize := fs.Int("buffer", 10000, "ring buffer size for replayed history")
-	rawDump := fs.String("raw-dump", "", "if set, append every raw fs_usage line to this path (debug)")
-	debug := fs.Bool("debug", false, "verbose diagnostics: hub stats, fsevents, ws connects, tap samples")
+	rawDump := fs.String("raw-dump", "", "append every raw kernel-tap line to this file (debug)")
+	debug := fs.Bool("debug", false, "verbose diagnostics")
 	_ = fs.Parse(os.Args[1:])
 	if *dir == "" {
 		fmt.Fprintln(os.Stderr, "agentflash: --dir is required")

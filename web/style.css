@@ -125,9 +125,10 @@ header input {
   font-weight: 600;
 }
 
-.state-idle    { color: var(--fg-dim); }
-.state-working { color: #3fb950; border-color: #3fb950; }
-.state-waiting { color: #d29922; border-color: #d29922; }
+.state-idle     { color: var(--fg-dim); }
+.state-working  { color: #3fb950; border-color: #3fb950; }
+.state-thinking { color: #58a6ff; border-color: #58a6ff; }
+.state-waiting  { color: #d29922; border-color: #d29922; }
 
 main {
   display: grid;

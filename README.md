@@ -35,6 +35,35 @@ that owns HTTP/WebSocket, the file tree, and the FSEvents watcher. The
 UI re-execs itself under sudo to spawn the tap; only one password
 prompt per launch.
 
+## Requirements
+
+### macOS
+
+| Requirement | Notes |
+|---|---|
+| macOS 12 Monterey or later | Older releases may work but are untested |
+| `sudo` / root | `fs_usage` requires root |
+| Go 1.25+ | Build-time only; the shipped binary has no runtime dependency |
+
+### Linux
+
+| Requirement | Notes |
+|---|---|
+| Kernel ≥ 4.x | fanotify has been in-kernel since 2.6.36; FD-based `FAN_CLASS_NOTIF` needs ≥ 3.8 |
+| Kernel ≥ 5.1 recommended | Enables `FAN_MARK_FILESYSTEM` (whole-filesystem mark); older kernels fall back to per-mount automatically |
+| `CAP_SYS_ADMIN` (`sudo`) | Required for `fanotify_init` regardless of kernel version |
+| `/proc` filesystem mounted | Used to resolve process names from `/proc/<pid>/comm` and file paths from `/proc/self/fd/<n>` |
+| Go 1.25+ | Build-time only |
+
+No extra packages are needed — fanotify is part of the kernel and we call it directly via `golang.org/x/sys/unix`.
+
+### Network / container environments
+
+- **NFS mounts**: fanotify only observes I/O that the _local_ kernel initiates. Writes made by remote NFS clients bypass the local VFS event path entirely and are invisible. The same applies to inotify (used for the file tree). agentflash prints a warning at startup if the watched directory is on an NFS, CIFS/SMB, or FUSE filesystem. It will still track activity from local processes on that mount.
+- **Docker / Podman bind mounts**: work normally — the host kernel sees all I/O through its own VFS.
+- **Kubernetes / remote dev environments**: if the project directory is a network-backed volume (NFS, CIFS, or a CSI driver backed by one), the NFS caveat above applies.
+- **WSL2**: the Linux fanotify tap works inside WSL2, but files accessed through the `/mnt/c/…` Windows interop path are on a FUSE-backed mount (`9p`) and subject to the same remote-write visibility limitation.
+
 ## Build & run
 
 ```sh
@@ -46,11 +75,6 @@ make build-all       # also cross-compile Linux amd64 + arm64 from a Mac
 Open <http://127.0.0.1:7777>. You'll be prompted once for your sudo
 password (used to start `fs_usage` on macOS, `fanotify` on Linux —
 both require root).
-
-**Linux requirements**: kernel ≥ 5.1 for `FAN_MARK_FILESYSTEM`; older
-kernels fall back to a per-mount mark. `CAP_SYS_ADMIN` (i.e. sudo)
-is required either way. No `apt` package needed — fanotify is in the
-kernel and we wrap it via `golang.org/x/sys/unix`.
 
 ## Claude Code integration
 
@@ -67,19 +91,42 @@ watched dir are silently dropped.
 
 ## Flags
 
+### UI flags (`agentflash --dir <path> ...`)
+
 | Flag | Default | Notes |
 |---|---|---|
 | `--dir` | _(required)_ | Directory to watch |
 | `--addr` | `127.0.0.1:7777` | HTTP listen address |
 | `--buffer` | `10000` | Ring buffer size for replayed history |
 | `--debug` | `false` | Verbose stderr: hub stats, FSEvents, tap samples, ws connects |
-| `--raw-dump <file>` | _off_ | Append every raw `fs_usage` line to a file (debug) |
+| `--raw-dump <file>` | _off_ | Append every raw kernel-tap (`fs_usage` / `fanotify`) line to a file (debug) |
+
+### `hooks` flags (`agentflash hooks ...`)
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--addr` | `127.0.0.1:7777` | Address of the running agentflash UI that hooks will POST to |
+| `--apply` | `false` | Merge into the settings file instead of printing |
+| `--path` | `~/.claude/settings.json` | Settings file to print or modify |
+
+### `__tap` flags (internal)
+
+The `__tap` subcommand is spawned by the UI under sudo; its flags are not
+intended to be invoked by hand. Listed here for completeness:
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--dir` | _(required)_ | Directory to watch |
+| `--exclude-pid` | _empty_ | Comma-separated PIDs to drop events from |
+| `--exclude-name` | _empty_ | Comma-separated process names to drop events from |
+| `--raw-dump <file>` | _off_ | Append every raw kernel-tap line to a file (debug) |
+| `--debug` | `false` | Verbose tap diagnostics |
 
 Subcommands:
 
 - `agentflash --dir <path>` — main UI (default).
-- `agentflash hooks [--apply] [--path <file>]` — print or merge the
-  Claude Code hooks block.
+- `agentflash hooks [--addr <host:port>] [--apply] [--path <file>]` —
+  print or merge the Claude Code hooks block.
 - `agentflash __tap` — internal; spawned via sudo by the UI process.
 
 ## UI cheatsheet
@@ -118,6 +165,16 @@ Subcommands:
   `/proc` lookup; in that case the process column is blank.
 - Files deleted between event and our `/proc/self/fd` readlink show up
   with a `(deleted)` suffix on the path. Best-effort.
+- **Network filesystems (NFS, CIFS/SMB, FUSE)**: fanotify and inotify
+  only fire for I/O the local kernel performs. Writes from remote
+  clients are invisible. agentflash prints a warning at startup when
+  it detects the watch directory is on a network filesystem. Local
+  processes accessing the same mount are still tracked normally.
+- **`FAN_MARK_FILESYSTEM` vs per-mount**: on kernels < 5.1 or when
+  the filesystem doesn't support filesystem-level marks, agentflash
+  silently falls back to a per-mount mark. Coverage is identical for
+  most setups; on a system where the watched directory spans multiple
+  bind mounts the per-mount mark may miss events on the submounts.
 
 ## Layout
 

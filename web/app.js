@@ -61,10 +61,28 @@
 
   // ---------- WebSocket ----------
 
+  async function onConnect() {
+    let info;
+    try {
+      info = await fetch("/api/info").then((r) => r.json());
+    } catch {
+      return;
+    }
+    const newRoot = info.root;
+    if (newRoot === state.rootDir) return;
+    state.rootDir = newRoot;
+    dirEl.textContent = newRoot;
+    state.events = [];
+    state.counters.recv = 0;
+    state.nodes.clear();
+    await renderTreeRoot();
+    await expandAll();
+  }
+
   function connectWS() {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(`${proto}//${location.host}/ws`);
-    ws.onopen = () => { statusEl.textContent = "connected"; };
+    ws.onopen = () => { statusEl.textContent = "connected"; onConnect(); };
     ws.onclose = () => {
       statusEl.textContent = "disconnected — retrying";
       setTimeout(connectWS, 1000);
@@ -100,13 +118,15 @@
 
   // ---------- Claude events ----------
 
-  // State is driven by activity, not by Stop/Notification (which fire
-  // at unreliable times across Claude versions and were inverting the
-  // pill in practice). UserPromptSubmit / PreToolUse / PostToolUse
-  // mark "working" and arm a CLAUDE_IDLE_MS idle timer. The timer
-  // only flips to "waiting" when no tool calls are currently in
-  // flight — long-running tools (e.g. a 30 s Bash) keep the pill
-  // green for the duration.
+  // State transitions:
+  //   user_prompt / pre / post  → "working" (green) + reset idle timer
+  //   idle timer fires, no in-flight tools → "thinking" (blue): model is
+  //     generating its next response; no hook fires during inference
+  //   Stop hook fires            → "waiting" (amber): Claude is done,
+  //     awaiting user input
+  //   session_start              → "idle"
+  // Long-running tools (e.g. a 30 s Bash) keep the timer rescheduling
+  // so the pill stays green for the duration.
   const CLAUDE_IDLE_MS = 5000;
 
   function pingClaudeActive() {
@@ -125,7 +145,10 @@
       state.claude.idleTimer = setTimeout(checkIdleOrReschedule, CLAUDE_IDLE_MS);
       return;
     }
-    setStateLabel("waiting");
+    // No tool calls in flight and no activity for CLAUDE_IDLE_MS — the
+    // model is generating its next response. "waiting" is reserved for
+    // when the Stop hook fires (Claude is done and awaiting the user).
+    setStateLabel("thinking");
   }
 
   function handleClaudeEvent(e) {
@@ -172,10 +195,14 @@
         if (state.claude.idleTimer) clearTimeout(state.claude.idleTimer);
         setStateLabel("idle");
         break;
+      case "stop":
+        if (state.claude.idleTimer) clearTimeout(state.claude.idleTimer);
+        setStateLabel("waiting");
+        break;
       case "subagent_stop":
         state.claude.subagentType = null;
         break;
-      // stop / notification: ignored for state purposes (logged in panel).
+      // notification: ignored for state purposes (logged in panel).
     }
     renderClaudeChips();
   }
@@ -737,15 +764,6 @@
 
   // ---------- Init ----------
 
-  fetch("/api/info").then((r) => r.json()).then((info) => {
-    state.rootDir = info.root;
-    dirEl.textContent = info.root;
-    // Stamp data-full on already-rendered root entries now that we know root.
-    for (const [rel, node] of state.nodes) {
-      if (rel && node.li) node.li.dataset.full = `${info.root}/${rel}`;
-    }
-  }).catch(() => {});
-
   // Sync state from form fields whose values the browser may have
   // restored on refresh (the DOM <option selected> default doesn't
   // override Firefox/Chrome's session-form-state restoration).
@@ -759,6 +777,5 @@
 
   resizeCanvas();
   connectWS();
-  renderTreeRoot().then(() => expandAll());
   requestAnimationFrame(loop);
 })();
