@@ -1,4 +1,5 @@
 :root {
+  --panel-h: 200px;
   --bg: #0d1117;
   --bg-2: #161b22;
   --bg-3: #1f2630;
@@ -24,7 +25,7 @@ html, body {
 
 body {
   display: grid;
-  grid-template-rows: 44px 1fr 200px;
+  grid-template-rows: 44px 1fr 5px var(--panel-h);
 }
 
 header {
@@ -327,8 +328,15 @@ main {
 }
 .claude-panel-head button:hover { color: var(--fg); }
 
-body.claude-collapsed { grid-template-rows: 44px 1fr 28px; }
+body.claude-collapsed { grid-template-rows: 44px 1fr 5px 28px; }
 body.claude-collapsed #claudeLog { display: none; }
+
+#resizer {
+  background: var(--border);
+  cursor: ns-resize;
+  transition: background 120ms;
+}
+#resizer:hover, #resizer.dragging { background: var(--accent); }
 
 #claudeLog {
   flex: 1;

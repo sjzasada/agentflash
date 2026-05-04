@@ -20,6 +20,7 @@
   const claudeLogEl = el("claudeLog");
   const claudeClearBtn = el("claudeClear");
   const claudeHideBtn = el("claudeHide");
+  const resizerEl = el("resizer");
 
   const ctx = tapeCanvas.getContext("2d");
 
@@ -38,6 +39,7 @@
     events: [],
     maxEvents: 50000,
     running: true,
+    autoPause: false,      // set from /api/info; pause timeline on Claude Stop hook
     windowSec: 30,
     filter: "",
     rootDir: "",
@@ -71,6 +73,7 @@
     const newRoot = info.root;
     if (newRoot === state.rootDir) return;
     state.rootDir = newRoot;
+    state.autoPause = !!info.autoPause;
     dirEl.textContent = newRoot;
     state.events = [];
     state.counters.recv = 0;
@@ -165,6 +168,7 @@
         state.claude.goal = c.summary || c.prompt || "";
         state.claude.action = null;
         state.claude.subagentType = null;
+        if (state.autoPause) setRunning(true);
         pingClaudeActive();
         break;
       case "pre":
@@ -179,6 +183,7 @@
         if (c.tool === "Task" && c.subagentType) {
           state.claude.subagentType = c.subagentType;
         }
+        if (state.autoPause) setRunning(true);
         pingClaudeActive();
         scheduleActionDim();
         break;
@@ -198,6 +203,7 @@
       case "stop":
         if (state.claude.idleTimer) clearTimeout(state.claude.idleTimer);
         setStateLabel("waiting");
+        if (state.autoPause) setRunning(false);
         break;
       case "subagent_stop":
         state.claude.subagentType = null;
@@ -262,7 +268,7 @@
 
   function setStateLabel(s) {
     state.claude.state = s;
-    claudeStateEl.classList.remove("state-idle", "state-working", "state-waiting");
+    claudeStateEl.classList.remove("state-idle", "state-working", "state-thinking", "state-waiting");
     claudeStateEl.classList.add("state-" + s);
     claudeStateEl.textContent = s;
   }
@@ -311,8 +317,11 @@
   function resizeCanvas() {
     const dpr = window.devicePixelRatio || 1;
     const r = tapeCanvas.getBoundingClientRect();
-    tapeCanvas.width = Math.floor(r.width * dpr);
-    tapeCanvas.height = Math.floor(r.height * dpr);
+    const w = Math.floor(r.width * dpr);
+    const h = Math.floor(r.height * dpr);
+    if (tapeCanvas.width === w && tapeCanvas.height === h) return;
+    tapeCanvas.width = w;
+    tapeCanvas.height = h;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
   window.addEventListener("resize", resizeCanvas);
@@ -376,6 +385,7 @@
   }
 
   function draw() {
+    resizeCanvas();
     const r = tapeCanvas.getBoundingClientRect();
     const w = r.width, h = r.height;
     ctx.fillStyle = "#0d1117";
@@ -457,11 +467,13 @@
 
   // ---------- Controls ----------
 
-  toggle.addEventListener("click", () => {
-    state.running = !state.running;
-    toggle.textContent = state.running ? "Stop" : "Start";
-    toggle.classList.toggle("stopped", !state.running);
-  });
+  function setRunning(running) {
+    state.running = running;
+    toggle.textContent = running ? "Stop" : "Start";
+    toggle.classList.toggle("stopped", !running);
+  }
+
+  toggle.addEventListener("click", () => setRunning(!state.running));
   windowSel.addEventListener("change", () => {
     state.windowSec = parseInt(windowSel.value, 10);
   });
@@ -471,6 +483,38 @@
   refreshBtn.addEventListener("click", () => {
     refreshAllExpanded();
   });
+
+  // ---------- Panel resizer ----------
+
+  (function () {
+    let dragStartY = 0;
+    let dragStartH = 0;
+
+    resizerEl.addEventListener("mousedown", (e) => {
+      if (document.body.classList.contains("claude-collapsed")) return;
+      dragStartY = e.clientY;
+      dragStartH = parseFloat(getComputedStyle(document.documentElement)
+        .getPropertyValue("--panel-h")) || 200;
+      resizerEl.classList.add("dragging");
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "ns-resize";
+      e.preventDefault();
+    });
+
+    document.addEventListener("mousemove", (e) => {
+      if (!resizerEl.classList.contains("dragging")) return;
+      const delta = dragStartY - e.clientY;
+      const newH = Math.max(28, Math.min(window.innerHeight - 100, dragStartH + delta));
+      document.documentElement.style.setProperty("--panel-h", newH + "px");
+    });
+
+    document.addEventListener("mouseup", () => {
+      if (!resizerEl.classList.contains("dragging")) return;
+      resizerEl.classList.remove("dragging");
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    });
+  })();
 
   // ---------- File tree ----------
 

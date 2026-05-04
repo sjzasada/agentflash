@@ -29,11 +29,12 @@ Claude Code hooks (HTTP) ─┘
 - **Claude Code hooks** post tool-call payloads to the user-mode HTTP
   server.
 
-Architecturally there are two processes: a small privileged `tap` that
-does nothing except parse `fs_usage`, and the unprivileged UI server
-that owns HTTP/WebSocket, the file tree, and the FSEvents watcher. The
-UI re-execs itself under sudo to spawn the tap; only one password
-prompt per launch.
+Architecturally there are two processes: a small privileged `tap`
+subprocess (spawned via `sudo`) that does nothing except stream kernel
+events, and the unprivileged UI server that owns HTTP/WebSocket, the
+file tree, and the FSEvents watcher. Only the tap runs as root; the UI
+process itself remains unprivileged throughout. One sudo password
+prompt covers the whole session.
 
 ## Requirements
 
@@ -125,6 +126,7 @@ watched dir are silently dropped.
 | `--dir` | _(required)_ | Directory to watch |
 | `--addr` | `127.0.0.1:7777` | HTTP listen address |
 | `--buffer` | `10000` | Ring buffer size for replayed history |
+| `--auto-pause` | `false` | Pause the timeline when Claude's Stop hook fires; resumes on next prompt |
 | `--debug` | `false` | Verbose stderr: hub stats, FSEvents, tap samples, ws connects |
 | `--raw-dump <file>` | _off_ | Append every raw kernel-tap (`fs_usage` / `fanotify`) line to a file (debug) |
 

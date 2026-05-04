@@ -25,6 +25,7 @@ type Config struct {
 	RingSize    int
 	RawDumpFile string // optional, forwarded to the tap as --raw-dump
 	Debug       bool   // when true, emit verbose diagnostics
+	AutoPause   bool   // pause the timeline when Claude's Stop hook fires
 }
 
 // Run starts the UI server: spawns the privileged tap subprocess via
@@ -64,7 +65,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 	mux.HandleFunc("/api/tree", treeHandler(cfg.Dir))
-	mux.HandleFunc("/api/info", infoHandler(cfg.Dir))
+	mux.HandleFunc("/api/info", infoHandler(cfg.Dir, cfg.AutoPause))
 	mux.HandleFunc("/api/claude/event", claudeHookHandler(cfg.Dir, hub))
 	mux.HandleFunc("/ws", wsHandler(hub, dlog))
 

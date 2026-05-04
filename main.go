@@ -296,6 +296,7 @@ func runUI() {
 	ringSize := fs.Int("buffer", 10000, "ring buffer size for replayed history")
 	rawDump := fs.String("raw-dump", "", "append every raw kernel-tap line to this file (debug)")
 	debug := fs.Bool("debug", false, "verbose diagnostics")
+	autoPause := fs.Bool("auto-pause", false, "pause the timeline when Claude's Stop hook fires (resumes on next prompt)")
 	_ = fs.Parse(os.Args[1:])
 	if *dir == "" {
 		fmt.Fprintln(os.Stderr, "agentflash: --dir is required")
@@ -320,6 +321,7 @@ func runUI() {
 		RingSize:    *ringSize,
 		RawDumpFile: *rawDump,
 		Debug:       *debug,
+		AutoPause:   *autoPause,
 	}
 	if err := ui.Run(ctx, cfg); err != nil {
 		log.Fatalf("ui: %v", err)

@@ -14,10 +14,16 @@ type treeEntry struct {
 	IsDir bool   `json:"isDir"`
 }
 
-func infoHandler(root string) http.HandlerFunc {
+type infoResponse struct {
+	Root      string `json:"root"`
+	AutoPause bool   `json:"autoPause"`
+}
+
+func infoHandler(root string, autoPause bool) http.HandlerFunc {
+	info := infoResponse{Root: root, AutoPause: autoPause}
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"root": root})
+		_ = json.NewEncoder(w).Encode(info)
 	}
 }
 
